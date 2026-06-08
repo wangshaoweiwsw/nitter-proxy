@@ -18,11 +18,28 @@ export default async function handler(request: Request): Promise<Response> {
   const url = new URL(request.url);
   const username = url.searchParams.get("user") || "aleabitoreddit";
 
-  let lastError = "";
+  // Try syndication API first (Twitter's own CDN)
+  try {
+    const syndResp = await fetch(
+      `https://cdn.syndication.twimg.com/timeline/profile?screen_name=${username}`,
+      { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(8000) }
+    );
+    if (syndResp.ok) {
+      const data = await syndResp.json();
+      if (data && data.body) {
+        return new Response(JSON.stringify({ source: "syndication", data }), {
+          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+        });
+      }
+    }
+  } catch (e) {
+    // continue
+  }
 
+  // Try Nitter instances
   for (const base of NITTER_INSTANCES) {
-    const rssUrl = `${base}/${username}/rss`;
     try {
+      const rssUrl = `${base}/${username}/rss`;
       const resp = await fetch(rssUrl, {
         headers: {
           "User-Agent": "Mozilla/5.0 (compatible; NitterProxy/1.0)",
@@ -33,7 +50,7 @@ export default async function handler(request: Request): Promise<Response> {
 
       if (resp.ok) {
         const text = await resp.text();
-        if (text.startsWith("<?xml") || text.includes("<rss")) {
+        if (text.includes("<?xml") && text.includes("<rss")) {
           return new Response(text, {
             headers: {
               "Content-Type": "application/xml; charset=utf-8",
@@ -45,15 +62,12 @@ export default async function handler(request: Request): Promise<Response> {
         }
       }
     } catch (e) {
-      lastError = `${base}: ${e}`;
+      // next instance
     }
   }
 
-  return new Response(JSON.stringify({ error: "all instances failed", detail: lastError }), {
+  return new Response(JSON.stringify({ error: "all failed" }), {
     status: 502,
-    headers: {
-      "Content-Type": "application/json",
-      "Access-Control-Allow-Origin": "*",
-    },
+    headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
   });
 }
